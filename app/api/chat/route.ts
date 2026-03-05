@@ -1,6 +1,6 @@
 import { openai } from "@/app/lib/openai";
 
-const tool_calculator = [
+const tools = [
   {
     type: "function" as const,
     function: {
@@ -17,8 +17,37 @@ const tool_calculator = [
         required: ["expression"]
       }
     }
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "datetime",
+      description: "Use this tool when the user asks for the current date and time.",
+      parameters: {
+        type: "object",
+        properties: {},
+        required: []
+      }
+    }
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "fakeDB",
+      description: "Use this tool when the user asks for user information by its name that requires a fake database query.",
+      parameters: {
+        type: "object",
+        properties: {
+          name: {
+            type: "string",
+            description: "The name of the person to search for"
+          }
+        },
+        required: ["name"]
+      } 
+    }
   }
-]
+];
 
 export const POST = async (req: Request) => {
     try {
@@ -27,7 +56,7 @@ export const POST = async (req: Request) => {
         const response = await openai.chat.completions.create({
             model: "gpt-4o-mini",
             messages: [{ role: "user", content: question }],
-            tools: tool_calculator,
+            tools: tools,
             tool_choice: "auto",
         });
 
@@ -38,17 +67,38 @@ export const POST = async (req: Request) => {
         if (message.tool_calls && message.tool_calls.length > 0) {
             // GPT veut appeler un tool
             const toolCall = message.tool_calls[0] as any;
-            const { expression } = JSON.parse(toolCall.function.arguments)
-            
-            const result = eval(expression);
-            
+            const toolName = toolCall.function.name;
+
+            let toolResult = "";
+
+            if (toolName === "calculator") {
+              const { expression } = JSON.parse(toolCall.function.arguments)
+              toolResult = eval(expression).toString();
+            } else if (toolName === "datetime") {
+              toolResult = new Date().toString();
+            } else if (toolName === "fakeDB") {
+              const { name } = JSON.parse(toolCall.function.arguments);
+              // Simulate a database query
+              const fakeDB = [
+                { name: "Alice", age: 30, city: "New York" },
+                { name: "Bob", age: 25, city: "Los Angeles" },
+                { name: "Charlie", age: 35, city: "Chicago" },
+              ];
+              const userInfo = fakeDB.find(user => user.name.toLowerCase() === name.toLowerCase());
+              if (userInfo) {
+                toolResult = `Name: ${userInfo.name}, Age: ${userInfo.age}, City: ${userInfo.city}`;
+              } else {
+                toolResult = `User information for ${name} not found.`;
+              }
+            }
+
             // On rappelle GPT avec le résultat du calcul
             finalResponse = await openai.chat.completions.create({
                 model: "gpt-4o-mini",
                 messages: [
                     { role: "user", content: question },
                     { role: "assistant", content: null, tool_calls: message.tool_calls },
-                    { role: "tool", tool_call_id: toolCall.id, content: result.toString() }
+                    { role: "tool", tool_call_id: toolCall.id, content: toolResult }
                 ],
             });
         } else {
