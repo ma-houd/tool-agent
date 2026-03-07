@@ -1,4 +1,6 @@
 import { openai } from "@/app/lib/openai";
+import { calculator_response, datetime_response, fakeDB_response } from "@/app/lib/responses";
+import { zodResponseFormat } from "openai/helpers/zod.js";
 
 const tools = [
   {
@@ -49,6 +51,7 @@ const tools = [
   }
 ];
 
+
 export const POST = async (req: Request) => {
     try {
         const { question } = await req.json();
@@ -63,6 +66,7 @@ export const POST = async (req: Request) => {
         const message = response.choices[0].message;
         console.log("tool_calls:", message.tool_calls);
         let finalResponse;
+        let awaitedResponse;
 
         if (message.tool_calls && message.tool_calls.length > 0) {
             // GPT veut appeler un tool
@@ -72,10 +76,12 @@ export const POST = async (req: Request) => {
             let toolResult = "";
 
             if (toolName === "calculator") {
-              const { expression } = JSON.parse(toolCall.function.arguments)
-              toolResult = eval(expression).toString();
+              const { expression } = JSON.parse(toolCall.function.arguments);
+              awaitedResponse = calculator_response;
+              toolResult = JSON.stringify({ type: "calculator", result: eval(expression) });
             } else if (toolName === "datetime") {
-              toolResult = new Date().toString();
+              toolResult = JSON.stringify({ type: "datetime", datetime: new Date().toString() });
+              awaitedResponse = datetime_response;
             } else if (toolName === "fakeDB") {
               const { name } = JSON.parse(toolCall.function.arguments);
               // Simulate a database query
@@ -84,15 +90,16 @@ export const POST = async (req: Request) => {
                 { name: "Bob", age: 25, city: "Los Angeles" },
                 { name: "Charlie", age: 35, city: "Chicago" },
               ];
+              awaitedResponse = fakeDB_response;
               const userInfo = fakeDB.find(user => user.name.toLowerCase() === name.toLowerCase());
               if (userInfo) {
-                toolResult = `Name: ${userInfo.name}, Age: ${userInfo.age}, City: ${userInfo.city}`;
+                toolResult = JSON.stringify({ ...userInfo, type: "fakeDB", found: true });
               } else {
-                toolResult = `User information for ${name} not found.`;
+                toolResult = JSON.stringify({ name, age: null, city: null, type: "fakeDB", found: false });
               }
             }
 
-            // On rappelle GPT avec le résultat du calcul
+
             finalResponse = await openai.chat.completions.create({
                 model: "gpt-4o-mini",
                 messages: [
@@ -100,14 +107,20 @@ export const POST = async (req: Request) => {
                     { role: "assistant", content: null, tool_calls: message.tool_calls },
                     { role: "tool", tool_call_id: toolCall.id, content: toolResult }
                 ],
+                response_format: zodResponseFormat(awaitedResponse!, "user_info"),
             });
+            const parsed = awaitedResponse!.parse(JSON.parse(finalResponse.choices[0].message.content!));
+            return new Response(JSON.stringify(parsed), {
+                headers: { "Content-Type": "application/json" }
+            });
+
         } else {
             // GPT a répondu directement
             finalResponse = response;
         }
 
         const answer = finalResponse.choices[0].message.content;
-        return new Response(JSON.stringify({ answer }), {
+        return new Response(JSON.stringify({ type: 'text', answer }), {
             headers: { "Content-Type": "application/json" }
         });
     } catch (err) {
